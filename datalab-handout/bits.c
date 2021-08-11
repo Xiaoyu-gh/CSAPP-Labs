@@ -143,7 +143,8 @@ NOTES:
  *   Rating: 1
  */
 int bitXor(int x, int y) {
-    return 2;
+    // "not all 1" AND "not all 0"
+    return (~(x & y)) & (~(~x & ~y));
 }
 /* 
  * tmin - return minimum two's complement integer 
@@ -163,7 +164,14 @@ int tmin(void) {
  *   Rating: 1
  */
 int isTmax(int x) {
-    return 2;
+    // exploit rule that Tmax + 1 = Tmin
+    // ~Tmax ^ Tmin = 0
+    // so !(~x ^ (x + 1)) judges this
+    // while -1(1...1) has same property
+    // so !!(x + 1) exclude it
+    // Crucial: ! transfer any size int to 0 or 1 
+    // so !! normolazied x+1 to 0 or 1
+    return !(~x ^ (x + 1)) & !!(x + 1);
 }
 /* 
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
@@ -174,7 +182,15 @@ int isTmax(int x) {
  *   Rating: 2
  */
 int allOddBits(int x) {
-  return 2;
+    // create a bit pattern "mask": 0xaaaaaaaa(1010...10)
+    // whose odd bits is 1, even bits is 0
+    // if x & mask == mask, then return true
+    // but large const is ilegal,
+    // so use 0xaa to construct mask
+    int a = 0xaa;
+    int b = a + (a << 8);
+    int mask = b + (b << 16);
+    return !((x & mask) ^ mask);
 }
 /* 
  * negate - return -x 
@@ -184,7 +200,7 @@ int allOddBits(int x) {
  *   Rating: 2
  */
 int negate(int x) {
-  return 2;
+    return ~x + 1;
 }
 //3
 /* 
@@ -197,7 +213,13 @@ int negate(int x) {
  *   Rating: 3
  */
 int isAsciiDigit(int x) {
-  return 2;
+    int lastHex = x ^ 0x30;
+    int flag = lastHex + 6; // 9 + 6 = 15, if lastHex is > 9, it will overflow 
+    flag >>= 4; // to check if there is a overflow or not begin with 0x3...
+    return !flag & !(x >> 6);
+    // !(x >> 6) is to exculde 0xffffff..
+    // if x is 0x3.., x>>6 should be 0
+    // otherwise, false
 }
 /* 
  * conditional - same as x ? y : z 
@@ -207,7 +229,7 @@ int isAsciiDigit(int x) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-  return 2;
+    return 2;
 }
 /* 
  * isLessOrEqual - if x <= y  then return 1, else return 0 
@@ -259,7 +281,31 @@ int howManyBits(int x) {
  *   Rating: 4
  */
 unsigned floatScale2(unsigned uf) {
-  return 2;
+    const unsigned posinf = 0x7f800000;    
+    unsigned sign = uf & 0x80000000;
+    unsigned exp = uf & posinf; 
+    unsigned m = uf & 0x007fffff;
+    
+    // uf is NaN
+    if ((exp >> 23) == 0xff && m != 0) {
+        return uf;
+    }
+    
+    // denormalized case
+    if (exp == 0) {
+        // magic property!
+        m <<= 1; // whether m will overflow, it's correct
+    } 
+    // normalized that without overflow
+    // exp is less than 1111 1110(0xfe)
+    else if ((exp >> 23) < 0xfe) {
+        exp += (1 << 23); // exp's bits pattern + 1
+    }
+    // large norm that 2uf causes overfolw
+    // return infinite(keep sign bit)
+    else return sign | posinf;
+    
+    return sign | exp | m;
 }
 /* 
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
