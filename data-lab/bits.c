@@ -305,6 +305,7 @@ unsigned floatScale2(unsigned uf) {
     // return infinite(keep sign bit)
     else return sign | posinf;
     
+    // return modified bits pattern
     return sign | exp | m;
 }
 /* 
