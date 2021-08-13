@@ -229,7 +229,11 @@ int isAsciiDigit(int x) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-    return 2;
+    // transfer x to 00..0(if x=0), or 11...1(if x!=0)
+    x = !! x; // turn x into 0 or 1
+    x = ~x + 1; // negative
+    
+    return (x & y) | (~x & z); // x is like a mask
 }
 /* 
  * isLessOrEqual - if x <= y  then return 1, else return 0 
@@ -239,7 +243,23 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-  return 2;
+    // make judgment according to the sign of
+    // x, y and y-x
+    // to deal with overflow of y-x which cause sign changed
+    // use logic expression to exclude that situation
+
+    int xsign = (x >> 31) & 1;
+    int ysign = (y >> 31) & 1;
+    int sub = y + (~x + 1); // may cause overflow, eg. Tmin - Tmax
+    int subsign = (sub >> 31) & 1; // which return a postive result
+
+    // Core trick!
+    // since each "sign" is just one bit value(0 or 1)
+    // & and | operands have same effect of logic && and ||
+    // then this expression stands for
+    // (x<0 && y>=0) or (x and y has same sign AND y-x >= 0)
+    return (xsign & !ysign) | ((!xsign ^ ysign) & !subsign);
+    
 }
 //4
 /* 
@@ -251,7 +271,18 @@ int isLessOrEqual(int x, int y) {
  *   Rating: 4 
  */
 int logicalNeg(int x) {
-  return 2;
+    // compute negtive x, then compare their sign bit
+    // if x = 0, negx is still 0, which has same sign
+    // otherwise, it will change
+    // the only exception is Tmin(-Tmin = Tmin)
+    // so exclude 
+    int negx = ~x + 1;
+    int xsign = (x >> 31) & 1;
+    int negxsign = (negx >> 31) & 1;
+    // Can't use ~
+    // use ^1 to instead !, which turn 0 to 1; 1 to 0
+    // xsign^1 is to exclude negtive case
+    return (xsign ^ negxsign ^ 1) & (xsign ^ 1);
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
@@ -266,7 +297,37 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
-  return 0;
+    // The goal is find the most significant bit 1
+    // similar to binary search: 16 -> 8 -> 4 -> 2 -> 1
+    // b16 is 16 or 0, b8 is 8 or 0, etc
+    // accumulate them to get the index of  most significant bit 1
+
+    int b16, b8, b4, b2, b1, b0;
+    int flag = x >> 31; // 0x0 or 0xff..f
+    // if x is negtive, take complement
+    // if x is positive or 0, keep unchanged
+    // exploit "conditional" function
+    x = (~x & flag) | (x & ~flag);
+
+    b16 = !!(x >> 16) << 4; // b16 = 0 or 16
+    x >>= b16; // shift 16 bits or unchanged
+
+    b8 = !!(x >> 8) << 3;
+    x >>= b8;
+
+    b4 = !!(x >> 4) << 2;
+    x >>= b4;
+
+    b2 = !!(x >> 2) << 1;
+    x >>= b2;
+
+    b1 = !!(x >> 1); // b1 = 0 or 1
+    x >>= b1;
+
+    b0 = x; // now x is 0 or 1
+    
+    // the last 1 is sign bit
+    return b16 + b8 + b4 + b2 + b1 + b0 + 1;
 }
 //float
 /* 
@@ -302,7 +363,7 @@ unsigned floatScale2(unsigned uf) {
         exp += (1 << 23); // exp's bits pattern + 1
     }
     // large norm that 2uf causes overfolw
-    // return infinite(keep sign bit)
+    // return infinity(keep sign bit)
     else return sign | posinf;
     
     // return modified bits pattern
@@ -321,7 +382,47 @@ unsigned floatScale2(unsigned uf) {
  *   Rating: 4
  */
 int floatFloat2Int(unsigned uf) {
-  return 2;
+    // float -> int:
+    // truncate fractional part and round towards 0
+    
+    // bias = 127
+    // Norm.: E = -126 ~ 127, exp = 0x01 ~ 0xfe
+    // Denorm.: E = -126, exp = 0, frac = 2^-23 ~ (1-2^-23)
+    // the range of int is [-2^31, 2^31 -1]
+    
+    const int bias = 127;
+    // use masks to extract each part of uf
+    const unsigned posinf = 0x7f800000;    
+    unsigned s = uf & 0x80000000;
+    unsigned exp = uf & posinf; 
+    unsigned frac = uf & 0x007fffff;
+
+    int sign = s >> 31;
+    int E = (exp >> 23) - bias;
+   
+    // denormalized, or int(f) < 0
+    // round to 0
+    if (exp == 0 || E < 0) {
+        return 0;
+    } 
+
+    // normalized
+    // if positive
+    if (sign == 0) {
+        // if out of range
+        if (E > 30) {
+            return 0x80000000u;
+        }
+        // compute 1.frac * 2^E
+        else return (0x00800000 | frac) >> (23 - E);
+    }
+    else { // negtive
+        if (E > 31) {
+            return 0x80000000u;
+        }
+        // compute the int value and turn to negtive
+        else return ~((0x00800000 | frac) >> (23 - E)) + 1;
+    } 
 }
 /* 
  * floatPower2 - Return bit-level equivalent of the expression 2.0^x
@@ -337,5 +438,39 @@ int floatFloat2Int(unsigned uf) {
  *   Rating: 4
  */
 unsigned floatPower2(int x) {
-    return 2;
+    // bias = 127
+    // Norm.: E = -126 ~ 127, exp = 0x01 ~ 0xfe
+    // for 2^x, frac = 0, M = 1
+    // thus the range of norm is [2^-126, 2^127] 
+    // Denorm.: E = -126, smallest frac = 0x01(M = 2^-23)
+    // thus the range of denorm is [2^-149, 2^-126)
+
+    const int bias = 127, smallestE = -149, largestE = 127;
+    // bits pattern to construct result
+    unsigned sign = 0, exp, frac;
+    
+    // if out of range, return 0 or +INF
+    if (x < smallestE) {
+        return 0;
+    }
+    if (x > largestE) {
+        return 0x7f800000;
+    }
+
+    // denormalized
+    if (x < -126) {
+        exp = 0;
+        // since target is power of 2
+        // so frac has only one bit be 1, others be 0
+        // 126 - x is the index of bit 1, starting from left to right
+        // so 23 - (126 - x) is the bits needs to be shift leftwards
+        frac = (1 << (23 - (-126 - x)));
+        return sign | exp | frac;
+    }
+
+    // normalized
+    exp = (x + bias) << 23;
+    frac = 0;
+    return sign | exp | frac;
+
 }
