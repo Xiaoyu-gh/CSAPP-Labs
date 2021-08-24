@@ -8,6 +8,9 @@
 #include <unistd.h>  // dependency of getopt.h
 #include <getopt.h>  // use getopt function
 #include <math.h>  // use calculation like pow()
+#include <limits.h>  // use INT_MAX
+#include <stdbool.h>  // use bool type
+#include <stdint.h>  // use uint64_t
 
 
 // define data structures(begin with capital letter)
@@ -17,24 +20,35 @@ struct CacheLine {
     // "block" section is unneeded
     bool valid;
     uint64_t tag; // unsigned 64-bit int
-    int useCounter;
+    int useCount;
 };
 typedef CacheLine* CacheSet;
 typedef CachSet* Cache; // so Cach is Cacheline**
 
-// global variable
-static int s, E, b;
+static int s, E, b; // cache size
 FILE *pfile; // pointer to FILE struct, used to read tracefile
 Cache cache;
+
+// counters, print out as result
+int hits, misses, evictions;
+
+void parseArguments(int, char**);
+void cacheInitialize();
+void simulate();
+int visitCache(uint64_t);
+bool hitLine(CacheSet, uint64_t);
+int putInCache(CacheSet, uint64_t);
+
+
 
 int main(int argc, char **argv) {
     parseArguments(argc, argv);
     cacheInitialize();
-    
-
-    printSummary();
+    simulate();
+    printSummary(hits, misses, evictions);
     return 0;
 }
+
 
 // Phase1: parse command line options and arguments
 // initialize cache size: s, E and b(global variable)
@@ -70,10 +84,8 @@ void parseAruguments(int argc, char **argv) {
 }
 
 void simulate() {
-    cacheInitialze();
-
-    char flag;
-    uint64_t address;
+    char flag; // I, L, S, or M
+    uint64_t address; // operation address
     int size; // just for formatting, no actual use
 
     // loop through all file
@@ -83,10 +95,86 @@ void simulate() {
         if (flag == 'I') continue; // skip instruction
         switch (flag) {
             case 'L':
+                visitCache(address);
+                break;
+            case 'S':
+                visitCache(address);
+                break;
+            case 'M':
+                visitCache(address);
+                hits++;
+                break;
         }
 
     }
 }
+
+// return value:
+// 0 -- hit
+// 1 -- miss
+// 2 -- miss + eviction
+// used to elplement verbose mode
+int visitCache(uint64_t address) {
+    int t = 64 - s - b;
+    int setIdx = (int) (address << t) >> (t + b);
+    uint64_t tag = address >> (t + b);
+    CacheSet cacheset = cache[setIdx];
+
+    int line = hitLine(cacheset, tag);
+
+    if (line != -1) {
+        hits++;
+        cacheset[line].useCount += 1;
+        return 0;
+    }
+    else {
+        misses++;
+        return putIncache(cacheset, tag);
+    }
+
+}
+
+// if hit, return the hit line index with that cache set
+// else return -1(a miss)
+bool hitLine(CacheSet set, uint64_t tag) {
+    for (int i = 0; i < E; i++) {
+        if (set[i].valid && tag == set[i].tag) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// return value:
+// 1 -- miss
+// 2 -- miss + eviction
+int putInCache(CacheSet set, uint64_t tag) {
+    int lru = INT_MAX; // least recent used cont
+    for (int i = 0; i < E; i++) {
+        if (!set[i].valid) {
+            set[i].valid = true;
+            set[i].tag = tag;
+            return 1;
+        }
+        // find the minimum useCount  
+        if (set[i].useCount < lru) {
+            lru = set[i];
+        }
+    }
+    
+    // find the least one and evict it
+    for (int i = 0; i < E; i++) {
+        if (set[i].useCount == lru) {
+            set[i].tag = tag;
+            evictions++;
+            return 2;
+        }
+    }
+    
+    return -1; // error
+} 
+
+
 
 // allocate space for cache and initialize it with 0
 void cacheInitialize() {
@@ -94,7 +182,7 @@ void cacheInitialize() {
 
     // allocate memory for cache
     // CacheSet is pointer, whose size is 8
-    cache = (cache)malloc(sizeof(CacheSet) * S);
+    cache = (Cache)malloc(sizeof(CacheSet) * S);
     if (cache == NULL) {
         printf("Memory allocation failed.\n");
         exit(1);
