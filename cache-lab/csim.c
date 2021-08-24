@@ -22,8 +22,8 @@ struct CacheLine {
     uint64_t tag; // unsigned 64-bit int
     int useCount;
 };
-typedef CacheLine* CacheSet;
-typedef CachSet* Cache; // so Cach is Cacheline**
+typedef struct CacheLine* CacheSet;
+typedef CacheSet* Cache; // so Cach is Cacheline**
 
 static int s, E, b; // cache size
 FILE *pfile; // pointer to FILE struct, used to read tracefile
@@ -50,9 +50,9 @@ int main(int argc, char **argv) {
 }
 
 
-// Phase1: parse command line options and arguments
+// Parse command line options and arguments
 // initialize cache size: s, E and b(global variable)
-void parseAruguments(int argc, char **argv) {
+void parseArguments(int argc, char **argv) {
     int opt;
     // looping over each argument
     while ((opt = getopt(argc, argv, "s:E:b:t:")) != -1) {
@@ -70,7 +70,7 @@ void parseAruguments(int argc, char **argv) {
                 break;
             case 't':
                 // open tracefile,return pfile point to it
-                pfile = fopen(optarg, 'r');
+                pfile = fopen(optarg, "r");
                 if (pfile == NULL) {
                     printf("Open wrong trace file.\n");
                     exit(1);
@@ -78,7 +78,7 @@ void parseAruguments(int argc, char **argv) {
                 break;
             default:
                 printf("Wrong argument\n");
-                break;
+                exit(1);
         }
     }
 }
@@ -91,7 +91,7 @@ void simulate() {
     // loop through all file
     // each iteration process one line
     // Note: fscanf will ignore space while reads stream
-    while (fscanf(pfile, "%c %x,%d", &flag, &address, &size) == 3) {
+    while (fscanf(pfile, "%c %lx,%d", &flag, &address, &size) == 3) {
         if (flag == 'I') continue; // skip instruction
         switch (flag) {
             case 'L':
@@ -129,7 +129,7 @@ int visitCache(uint64_t address) {
     }
     else {
         misses++;
-        return putIncache(cacheset, tag);
+        return putInCache(cacheset, tag);
     }
 
 }
@@ -158,7 +158,7 @@ int putInCache(CacheSet set, uint64_t tag) {
         }
         // find the minimum useCount  
         if (set[i].useCount < lru) {
-            lru = set[i];
+            lru = set[i].useCount;
         }
     }
     
@@ -191,7 +191,7 @@ void cacheInitialize() {
     // allocate memory for each CacheSet in cache
     for (int i = 0; i < S; i++) {
         // must use calloc but not malloc, to initialize with 0
-        cache[i] = (CacheSet)calloc(E, sizeof(CacheLine));
+        cache[i] = (CacheSet)calloc(E, sizeof(struct CacheLine));
         if (cache[i] == NULL) {
             printf("Memory allocation failed.\n");
             exit(1);
