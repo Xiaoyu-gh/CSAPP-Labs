@@ -6,8 +6,6 @@
 #include <stdio.h>  // IO
 #include <stdlib.h>  // library functions
 #include <getopt.h>  // use getopt function
-#include <math.h>  // use calculation like pow()
-#include <limits.h>  // use INT_MAX
 #include <stdbool.h>  // use bool type
 #include <stdint.h>  // use uint64_t
 
@@ -19,7 +17,7 @@ struct CacheLine {
     // "block" section is unneeded
     bool valid;
     uint64_t tag; // unsigned 64-bit int
-    int useCount;
+    int timeStamp; // used for LRU policy
 };
 typedef struct CacheLine* CacheSet;
 typedef CacheSet* Cache; // so Cach is Cacheline**
@@ -29,6 +27,8 @@ static bool verbose = false; // verbose mode flag
 FILE *pfile; // pointer to FILE struct, used to read tracefile
 Cache cache;
 
+static int currentTime = 0;
+
 // counters, print out as result
 static int hits, misses, evictions;
 
@@ -37,7 +37,7 @@ void cacheInitialize();
 void simulate();
 int visitCache(uint64_t);
 int hitLine(CacheSet, uint64_t);
-int putInCache(CacheSet, uint64_t);
+int updateCache(CacheSet, uint64_t);
 
 
 
@@ -107,10 +107,11 @@ void simulate() {
 
     // loop through all file
     // each iteration process one line
-    // Note: fscanf will skip the char that mapped with space 
-    // in the format string, like a filter
-    while (fscanf(pfile, " %c %lx,%d", &flag, &address, &size) > 0) {
-        // case 'I' is skiped by fscanf
+    // Note: white-space in format string matches any amount of space
+    // INCLUDE none, in the input, so 'I' will still be read
+    while (fscanf(pfile, " %c %lx,%d\n", &flag, &address, &size) == 3) {
+        if (flag == 'I') continue;
+
         switch (flag) {
             case 'L':
                 visitState = visitCache(address);
@@ -125,15 +126,24 @@ void simulate() {
             default:
                 printf("fscanf reads wrong input\n");
         }
+
+        // each operation processed
+        currentTime++;
         
         // implement verbose mode
         if (verbose) {
             switch (visitState) {
                 case 0:
-                    printf("%c %lx,%d hit\n", flag, address, size);
+                    if (flag == 'M') {
+                        printf("%c %lx,%d hit hit\n", flag, address, size);
+                    }
+                    else printf("%c %lx,%d hit\n", flag, address, size);
                     break;
                 case 1:
-                    printf("%c %lx,%d miss\n", flag, address, size);
+                    if (flag == 'M') {
+                        printf("%c %lx,%d miss hit\n", flag, address, size);
+                    }
+                    else printf("%c %lx,%d miss\n", flag, address, size);
                     break;
                 case 2:
                     if (flag == 'M') {
@@ -150,7 +160,7 @@ void simulate() {
 
     }
 
-    int S = pow(2, s);
+    int S = (1 << s); // 2^s
     for (int i = 0; i < S; i++) {
         free(cache[i]);
     }
@@ -173,12 +183,13 @@ int visitCache(uint64_t address) {
 
     if (line != -1) {
         hits++;
-        cacheset[line].useCount += 1;
+        // if hit, update timeStamp
+        cacheset[line].timeStamp = currentTime;
         return 0;
     }
     else {
         misses++;
-        return putInCache(cacheset, tag);
+        return updateCache(cacheset, tag);
     }
 
 }
@@ -197,24 +208,30 @@ int hitLine(CacheSet set, uint64_t tag) {
 // return value:
 // 1 -- miss
 // 2 -- miss + eviction
-int putInCache(CacheSet set, uint64_t tag) {
-    int lru = INT_MAX; // least recent used cont
+int updateCache(CacheSet set, uint64_t tag) {
+    int lru = currentTime; // least recent used time
+
+    // use least recently used replacment policy
     for (int i = 0; i < E; i++) {
+        // if empty, store in it
         if (!set[i].valid) {
             set[i].valid = true;
             set[i].tag = tag;
+            set[i].timeStamp = currentTime;
             return 1;
         }
-        // find the minimum useCount  
-        if (set[i].useCount < lru) {
-            lru = set[i].useCount;
+        // find the lru time
+        if (set[i].timeStamp < lru) {
+            lru = set[i].timeStamp;
         }
     }
     
-    // find the least one and evict it
+    // find the lru one and evict it
+    // having min timeStamp means lru
     for (int i = 0; i < E; i++) {
-        if (set[i].useCount == lru) {
+        if (set[i].timeStamp == lru) {
             set[i].tag = tag;
+            set[i].timeStamp = currentTime;
             evictions++;
             return 2;
         }
@@ -227,7 +244,7 @@ int putInCache(CacheSet set, uint64_t tag) {
 
 // allocate space for cache and initialize it with 0
 void cacheInitialize() {
-    int S = pow(2, s); // number of sets
+    int S = (1 << s); // number of sets
 
     // allocate memory for cache
     // CacheSet is pointer, whose size is 8
