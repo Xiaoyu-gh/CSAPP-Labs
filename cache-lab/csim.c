@@ -5,7 +5,6 @@
 #include "cachelab.h" // required
 #include <stdio.h>  // IO
 #include <stdlib.h>  // library functions
-#include <unistd.h>  // dependency of getopt.h
 #include <getopt.h>  // use getopt function
 #include <math.h>  // use calculation like pow()
 #include <limits.h>  // use INT_MAX
@@ -37,7 +36,7 @@ void parseArguments(int, char**);
 void cacheInitialize();
 void simulate();
 int visitCache(uint64_t);
-bool hitLine(CacheSet, uint64_t);
+int hitLine(CacheSet, uint64_t);
 int putInCache(CacheSet, uint64_t);
 
 
@@ -57,7 +56,8 @@ void parseArguments(int argc, char **argv) {
     const char* usage = "Usage: %s [-hv] -s <s> -E <E> -b <b> -t <tracefile>\n";
     int opt;
 
-    if (argc < 2) {
+    // least number of command line arguments
+    if (argc < 9) {
         printf("Wrong arguments!\n");
         printf(usage, argv[0]);
         exit(1);
@@ -107,9 +107,10 @@ void simulate() {
 
     // loop through all file
     // each iteration process one line
-    // Note: fscanf will ignore space while reads stream
-    while (fscanf(pfile, "%c %lx,%d", &flag, &address, &size) == 3) {
-        if (flag == 'I') continue; // skip instruction
+    // Note: fscanf will skip the char that mapped with space 
+    // in the format string, like a filter
+    while (fscanf(pfile, " %c %lx,%d", &flag, &address, &size) > 0) {
+        // case 'I' is skiped by fscanf
         switch (flag) {
             case 'L':
                 visitState = visitCache(address);
@@ -121,18 +122,20 @@ void simulate() {
                 visitState = visitCache(address);
                 hits++;
                 break;
+            default:
+                printf("fscanf reads wrong input\n");
         }
         
         // implement verbose mode
         if (verbose) {
             switch (visitState) {
-                case '0':
+                case 0:
                     printf("%c %lx,%d hit\n", flag, address, size);
                     break;
-                case '1':
+                case 1:
                     printf("%c %lx,%d miss\n", flag, address, size);
                     break;
-                case '2':
+                case 2:
                     if (flag == 'M') {
                         printf("%c %lx,%d miss eviction hit\n",
                                 flag, address, size);
@@ -140,18 +143,19 @@ void simulate() {
                     else printf("%c %lx,%d miss eviction \n",
                                  flag, address, size);
                     break;
+                default:
+                    printf("visit state wrong\n");
             }
         }
 
     }
-    fclose(pfile);
 
     int S = pow(2, s);
     for (int i = 0; i < S; i++) {
         free(cache[i]);
     }
     free(cache);
-    
+    fclose(pfile);
 }
 
 // return value:
@@ -161,8 +165,8 @@ void simulate() {
 // used to elplement verbose mode
 int visitCache(uint64_t address) {
     int t = 64 - s - b;
-    int setIdx = (int) (address << t) >> (t + b);
-    uint64_t tag = address >> (t + b);
+    uint64_t setIdx = (address << t) >> (t + b);
+    uint64_t tag = address >> (s + b);
     CacheSet cacheset = cache[setIdx];
 
     int line = hitLine(cacheset, tag);
@@ -181,7 +185,7 @@ int visitCache(uint64_t address) {
 
 // if hit, return the hit line index with that cache set
 // else return -1(a miss)
-bool hitLine(CacheSet set, uint64_t tag) {
+int hitLine(CacheSet set, uint64_t tag) {
     for (int i = 0; i < E; i++) {
         if (set[i].valid && tag == set[i].tag) {
             return i;
