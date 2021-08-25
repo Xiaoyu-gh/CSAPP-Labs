@@ -26,11 +26,12 @@ typedef struct CacheLine* CacheSet;
 typedef CacheSet* Cache; // so Cach is Cacheline**
 
 static int s, E, b; // cache size
+static bool verbose = false; // verbose mode flag
 FILE *pfile; // pointer to FILE struct, used to read tracefile
 Cache cache;
 
 // counters, print out as result
-int hits, misses, evictions;
+static int hits, misses, evictions;
 
 void parseArguments(int, char**);
 void cacheInitialize();
@@ -53,12 +54,26 @@ int main(int argc, char **argv) {
 // Parse command line options and arguments
 // initialize cache size: s, E and b(global variable)
 void parseArguments(int argc, char **argv) {
+    const char* usage = "Usage: %s [-hv] -s <s> -E <E> -b <b> -t <tracefile>\n";
     int opt;
+
+    if (argc < 2) {
+        printf("Wrong arguments!\n");
+        printf(usage, argv[0]);
+        exit(1);
+    }
+
     // looping over each argument
-    while ((opt = getopt(argc, argv, "s:E:b:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "hvs:E:b:t:")) != -1) {
         // determine which argument it's processing
         // optarg is a char*, whitch stored option arguments
         switch(opt) {
+            case 'h':
+                printf(usage, argv[0]);
+                exit(1);
+            case 'v':
+                verbose = true;
+                break;
             case 's':
                 s = atoi(optarg);
                 break;
@@ -77,7 +92,7 @@ void parseArguments(int argc, char **argv) {
                 }
                 break;
             default:
-                printf("Wrong argument\n");
+                printf(usage, argv[0]);
                 exit(1);
         }
     }
@@ -88,6 +103,8 @@ void simulate() {
     uint64_t address; // operation address
     int size; // just for formatting, no actual use
 
+    int visitState; // return value of visitCache
+
     // loop through all file
     // each iteration process one line
     // Note: fscanf will ignore space while reads stream
@@ -95,18 +112,46 @@ void simulate() {
         if (flag == 'I') continue; // skip instruction
         switch (flag) {
             case 'L':
-                visitCache(address);
+                visitState = visitCache(address);
                 break;
             case 'S':
-                visitCache(address);
+                visitState = visitCache(address);
                 break;
             case 'M':
-                visitCache(address);
+                visitState = visitCache(address);
                 hits++;
                 break;
         }
+        
+        // implement verbose mode
+        if (verbose) {
+            switch (visitState) {
+                case '0':
+                    printf("%c %lx,%d hit\n", flag, address, size);
+                    break;
+                case '1':
+                    printf("%c %lx,%d miss\n", flag, address, size);
+                    break;
+                case '2':
+                    if (flag == 'M') {
+                        printf("%c %lx,%d miss eviction hit\n",
+                                flag, address, size);
+                    }
+                    else printf("%c %lx,%d miss eviction \n",
+                                 flag, address, size);
+                    break;
+            }
+        }
 
     }
+    fclose(pfile);
+
+    int S = pow(2, s);
+    for (int i = 0; i < S; i++) {
+        free(cache[i]);
+    }
+    free(cache);
+    
 }
 
 // return value:
