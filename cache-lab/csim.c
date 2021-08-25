@@ -5,10 +5,7 @@
 #include "cachelab.h" // required
 #include <stdio.h>  // IO
 #include <stdlib.h>  // library functions
-#include <unistd.h>  // dependency of getopt.h
 #include <getopt.h>  // use getopt function
-#include <math.h>  // use calculation like pow()
-#include <limits.h>  // use INT_MAX
 #include <stdbool.h>  // use bool type
 #include <stdint.h>  // use uint64_t
 
@@ -20,24 +17,27 @@ struct CacheLine {
     // "block" section is unneeded
     bool valid;
     uint64_t tag; // unsigned 64-bit int
-    int useCount;
+    int timeStamp; // used for LRU policy
 };
-typedef CacheLine* CacheSet;
-typedef CachSet* Cache; // so Cach is Cacheline**
+typedef struct CacheLine* CacheSet;
+typedef CacheSet* Cache; // so Cach is Cacheline**
 
 static int s, E, b; // cache size
+static bool verbose = false; // verbose mode flag
 FILE *pfile; // pointer to FILE struct, used to read tracefile
 Cache cache;
 
+static int currentTime = 0;
+
 // counters, print out as result
-int hits, misses, evictions;
+static int hits, misses, evictions;
 
 void parseArguments(int, char**);
 void cacheInitialize();
 void simulate();
 int visitCache(uint64_t);
-bool hitLine(CacheSet, uint64_t);
-int putInCache(CacheSet, uint64_t);
+int hitLine(CacheSet, uint64_t);
+int updateCache(CacheSet, uint64_t);
 
 
 
@@ -50,15 +50,30 @@ int main(int argc, char **argv) {
 }
 
 
-// Phase1: parse command line options and arguments
+// Parse command line options and arguments
 // initialize cache size: s, E and b(global variable)
-void parseAruguments(int argc, char **argv) {
+void parseArguments(int argc, char **argv) {
+    const char* usage = "Usage: %s [-hv] -s <s> -E <E> -b <b> -t <tracefile>\n";
     int opt;
+
+    // least number of command line arguments
+    if (argc < 9) {
+        printf("Wrong arguments!\n");
+        printf(usage, argv[0]);
+        exit(1);
+    }
+
     // looping over each argument
-    while ((opt = getopt(argc, argv, "s:E:b:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "hvs:E:b:t:")) != -1) {
         // determine which argument it's processing
         // optarg is a char*, whitch stored option arguments
         switch(opt) {
+            case 'h':
+                printf(usage, argv[0]);
+                exit(1);
+            case 'v':
+                verbose = true;
+                break;
             case 's':
                 s = atoi(optarg);
                 break;
@@ -70,15 +85,15 @@ void parseAruguments(int argc, char **argv) {
                 break;
             case 't':
                 // open tracefile,return pfile point to it
-                pfile = fopen(optarg, 'r');
+                pfile = fopen(optarg, "r");
                 if (pfile == NULL) {
                     printf("Open wrong trace file.\n");
                     exit(1);
                 }
                 break;
             default:
-                printf("Wrong argument\n");
-                break;
+                printf(usage, argv[0]);
+                exit(1);
         }
     }
 }
@@ -88,25 +103,69 @@ void simulate() {
     uint64_t address; // operation address
     int size; // just for formatting, no actual use
 
+    int visitState; // return value of visitCache
+
     // loop through all file
     // each iteration process one line
-    // Note: fscanf will ignore space while reads stream
-    while (fscanf(pfile, "%c %x,%d", &flag, &address, &size) == 3) {
-        if (flag == 'I') continue; // skip instruction
+    // Note: white-space in format string matches any amount of space
+    // INCLUDE none, in the input, so 'I' will still be read
+    while (fscanf(pfile, " %c %lx,%d\n", &flag, &address, &size) == 3) {
+        if (flag == 'I') continue;
+
         switch (flag) {
             case 'L':
-                visitCache(address);
+                visitState = visitCache(address);
                 break;
             case 'S':
-                visitCache(address);
+                visitState = visitCache(address);
                 break;
             case 'M':
-                visitCache(address);
+                visitState = visitCache(address);
                 hits++;
                 break;
+            default:
+                printf("fscanf reads wrong input\n");
+        }
+
+        // each operation processed
+        currentTime++;
+        
+        // implement verbose mode
+        if (verbose) {
+            switch (visitState) {
+                case 0:
+                    if (flag == 'M') {
+                        printf("%c %lx,%d hit hit\n", flag, address, size);
+                    }
+                    else printf("%c %lx,%d hit\n", flag, address, size);
+                    break;
+                case 1:
+                    if (flag == 'M') {
+                        printf("%c %lx,%d miss hit\n", flag, address, size);
+                    }
+                    else printf("%c %lx,%d miss\n", flag, address, size);
+                    break;
+                case 2:
+                    if (flag == 'M') {
+                        printf("%c %lx,%d miss eviction hit\n",
+                                flag, address, size);
+                    }
+                    else printf("%c %lx,%d miss eviction \n",
+                                 flag, address, size);
+                    break;
+                default:
+                    printf("visit state wrong\n");
+            }
         }
 
     }
+
+    int S = (1 << s); // 2^s
+    for (int i = 0; i < S; i++) {
+        free(cache[i]);
+    }
+    free(cache);
+    fclose(pfile);
 }
 
 // return value:
@@ -116,27 +175,28 @@ void simulate() {
 // used to elplement verbose mode
 int visitCache(uint64_t address) {
     int t = 64 - s - b;
-    int setIdx = (int) (address << t) >> (t + b);
-    uint64_t tag = address >> (t + b);
+    uint64_t setIdx = (address << t) >> (t + b);
+    uint64_t tag = address >> (s + b);
     CacheSet cacheset = cache[setIdx];
 
     int line = hitLine(cacheset, tag);
 
     if (line != -1) {
         hits++;
-        cacheset[line].useCount += 1;
+        // if hit, update timeStamp
+        cacheset[line].timeStamp = currentTime;
         return 0;
     }
     else {
         misses++;
-        return putIncache(cacheset, tag);
+        return updateCache(cacheset, tag);
     }
 
 }
 
 // if hit, return the hit line index with that cache set
 // else return -1(a miss)
-bool hitLine(CacheSet set, uint64_t tag) {
+int hitLine(CacheSet set, uint64_t tag) {
     for (int i = 0; i < E; i++) {
         if (set[i].valid && tag == set[i].tag) {
             return i;
@@ -148,24 +208,30 @@ bool hitLine(CacheSet set, uint64_t tag) {
 // return value:
 // 1 -- miss
 // 2 -- miss + eviction
-int putInCache(CacheSet set, uint64_t tag) {
-    int lru = INT_MAX; // least recent used cont
+int updateCache(CacheSet set, uint64_t tag) {
+    int lru = currentTime; // least recent used time
+
+    // use least recently used replacment policy
     for (int i = 0; i < E; i++) {
+        // if empty, store in it
         if (!set[i].valid) {
             set[i].valid = true;
             set[i].tag = tag;
+            set[i].timeStamp = currentTime;
             return 1;
         }
-        // find the minimum useCount  
-        if (set[i].useCount < lru) {
-            lru = set[i];
+        // find the lru time
+        if (set[i].timeStamp < lru) {
+            lru = set[i].timeStamp;
         }
     }
     
-    // find the least one and evict it
+    // find the lru one and evict it
+    // having min timeStamp means lru
     for (int i = 0; i < E; i++) {
-        if (set[i].useCount == lru) {
+        if (set[i].timeStamp == lru) {
             set[i].tag = tag;
+            set[i].timeStamp = currentTime;
             evictions++;
             return 2;
         }
@@ -178,7 +244,7 @@ int putInCache(CacheSet set, uint64_t tag) {
 
 // allocate space for cache and initialize it with 0
 void cacheInitialize() {
-    int S = pow(2, s); // number of sets
+    int S = (1 << s); // number of sets
 
     // allocate memory for cache
     // CacheSet is pointer, whose size is 8
@@ -191,7 +257,7 @@ void cacheInitialize() {
     // allocate memory for each CacheSet in cache
     for (int i = 0; i < S; i++) {
         // must use calloc but not malloc, to initialize with 0
-        cache[i] = (CacheSet)calloc(E, sizeof(CacheLine));
+        cache[i] = (CacheSet)calloc(E, sizeof(struct CacheLine));
         if (cache[i] == NULL) {
             printf("Memory allocation failed.\n");
             exit(1);
