@@ -62,6 +62,46 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N])
             }
         }
     }
+    
+    // since each row will occupy 16 sets,
+    // after 4 row, the cache will be full fill
+    // so row 0 will conflict with row 4, etc.
+    // so the largest block we can use is 4*4
+    if (M == 64) {
+       for (int ibase = 0; ibase < N; ibase += 4) {
+           for (int jbase = 0; jbase < M; jbase += 4) {
+               for (int i = ibase; i < ibase + 4 && i < N; i++) {
+                   int j = jbase;
+
+                    int t0 = A[i][j]; // temp
+                    int t1 = A[i][j+1];
+                    int t2 = A[i][j+2];
+                    int t3 = A[i][j+3];
+
+                    B[j][i] = t0;
+                    B[j+1][i] = t1;
+                    B[j+2][i] = t2;
+                    B[j+3][i] = t3;
+               }
+           }
+       } 
+    }
+
+
+
+    // block size: 16 * 16
+    // ie, (16 * 2) sets per block
+    if (M == 61) {
+       for (int ibase = 0; ibase < N; ibase += 16) {
+           for (int jbase = 0; jbase < M; jbase += 16) {
+               for (int i = ibase; i < ibase + 16 && i < N; i++) {
+                   for (int j = jbase; j < jbase + 16 && j < M; j++) {
+                       B[j][i] = A[i][j];
+                   }
+               }
+           }
+       } 
+    }
 }
 
 /* 
