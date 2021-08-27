@@ -15,3 +15,4 @@ trace.tmp
 trace.f*
 tracegen
 .vscode
+.marker
