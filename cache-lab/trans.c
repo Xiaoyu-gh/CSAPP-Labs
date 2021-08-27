@@ -22,6 +22,46 @@ int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 {
+    // M = 32, N = 32
+    // block size = 8 * 8 (ints)
+    // total 16 blocks of each matrics
+    if (M == 32) {
+        for (int ibase = 0; ibase < N; ibase += 8) {
+            for (int jbase = 0; jbase < M; jbase += 8) {
+                // a block
+                for (int i = ibase; i < ibase + 8; i++) {
+                    // if we do like:
+                    // for j=jbase -> jbase + 8 do
+                    //     B[j][i] = A[i][j]
+                    // there will be conflict miss on diagnose
+                    // ie. B[n][n] and A[n][n] are mapped to the same cache set
+                     
+                    // so use 8 local temp variable to sequentially load A's row
+                    // then store in B, whitch can avoide conflict
+
+                    int j = jbase;
+                    
+                    int t0 = A[i][j]; // temp
+                    int t1 = A[i][j+1];
+                    int t2 = A[i][j+2];
+                    int t3 = A[i][j+3];
+                    int t4 = A[i][j+4];
+                    int t5 = A[i][j+5];
+                    int t6 = A[i][j+6];
+                    int t7 = A[i][j+7];
+                    
+                    B[j][i] = t0;
+                    B[j+1][i] = t1;
+                    B[j+2][i] = t2;
+                    B[j+3][i] = t3;
+                    B[j+4][i] = t4;
+                    B[j+5][i] = t5;
+                    B[j+6][i] = t6;
+                    B[j+7][i] = t7;
+                }
+            }
+        }
+    }
 }
 
 /* 
