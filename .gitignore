@@ -2,8 +2,8 @@
 .*.sw*
 btest
 dlc
-driver.pl
 fshow
+*.pl
 ishow
 *.o
 *.tar
@@ -16,3 +16,10 @@ trace.f*
 tracegen
 .vscode
 .marker
+
+tsh
+tshref
+myint
+myspin
+mysplit
+mystop
