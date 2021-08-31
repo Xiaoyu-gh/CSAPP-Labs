@@ -3,6 +3,7 @@
  * 
  * Author: Xiaoyu Zhang
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -165,7 +166,59 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    char *argv[MAXARGS]; // argv list built by parseline()
+    int bg; // should the job run in the background?
+    pid_t pid;
+    int status; // BG or FG
+    sigset_t mask, prev;
+
+    bg = parseline(cmdline, argv);
+    status = bg ? BG : FG;
+
+    if (sigemptyset(&mask) < 0)
+        unix_error("sigempty error");
+    if (sigaddset(&mask, SIGCHLD) < 0) 
+        unix_error("sigaddset error");
+     
+    if (argv[0] == NULL) 
+        return; // ignore empty line
+
+    // if the file doesn't exist, just return
+    // and DON't fork and execve
+    if (!builtin_cmd(argv)) {
+        if (access(argv[0], F_OK) == -1) {
+            fprintf(stderr, "%s: Command not found\n", argv[0]);
+            return;
+        }
+
+        if (sigprocmask(SIG_BLOCK, &mask, &prev) < 0) // block SIGCHLD
+            unix_error("sigprocmask error");
+
+        if ((pid = fork()) < 0)
+            unix_error("fork error");
+
+        if (pid == 0) {  // child process
+            if (sigprocmask(SIG_SETMASK, &prev, NULL)) // unblock SIGCHLD
+                unix_error("sigprocmask error");
+            if (setpgid(0, 0) < 0) // set a new group for pid
+                unix_error("setpgid error");
+            if (execve(argv[0], argv, environ) < 0) 
+                unix_error("execve error");
+            
+        }
+         
+        // parent process
+        addjob(jobs, pid, status, cmdline);
+
+        if (bg) {
+            if (sigprocmask(SIG_SETMASK, &prev, NULL)) // unblock SIGCHLD
+                unix_error("sigprocmask error");
+            printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
+        }
+        else waitfg(pid); // parent process waits for forground job to terminate
+    }
     return;
+
 }
 
 /* 
@@ -228,9 +281,25 @@ int parseline(const char *cmdline, char **argv)
 /* 
  * builtin_cmd - If the user has typed a built-in command then execute
  *    it immediately.  
+ * return value:
+ *    1 -- is builtin cmd
+ *    0 -- not
  */
 int builtin_cmd(char **argv) 
 {
+    if (!strcmp(argv[0], "quit")) 
+        exit(0); // quit command
+
+    if (!strcmp(argv[0], "jobs")) {
+        listjobs(jobs);
+        return 1;
+    }
+    
+    if (!strcmp(argv[0], "fg") || !strcmp(argv[0], "bg")) {
+        do_bgfg(argv);
+        return 1;
+    }
+
     return 0;     /* not a builtin command */
 }
 
@@ -239,6 +308,18 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    // TODO: error handling:
+    // argv prototype; illegal pid or %jobid(a, 999999, etc)
+    pid_t pid;
+
+    if (argv[1][0] == '%') {
+        struct job_t job = jobs[atoi(argv[1]+1)];
+        pid = job.pid;   
+    }
+    else pid = atoi(argv[1]);
+
+    if (kill(pid, SIGCONT) < 0)
+        unix_error("kill error");
     return;
 }
 
@@ -247,6 +328,12 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    sigset_t mask;
+    if (sigemptyset(&mask) < 0)
+        unix_error("sigempty error");
+
+    while (fgpid(jobs) == pid)
+        sigsuspend(&mask); // tmporarily unblock SIGCHLD
     return;
 }
 
@@ -263,6 +350,7 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+    
     return;
 }
 
@@ -273,6 +361,15 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
+    pid_t pid = fgpid(jobs);
+
+    if (pid != 0) {
+        int jid = pid2jid(pid);
+        printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, sig);
+        deletejob(jobs, pid);
+        if (kill(-pid, sig) < 0) 
+            unix_error("kill error");
+    }
     return;
 }
 
@@ -283,6 +380,16 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    pid_t pid = fgpid(jobs);
+
+    if (pid != 0) {
+        int jid = pid2jid(pid);
+        struct job_t *job = getjobpid(jobs, pid);
+        job -> state = ST;
+        printf("Job [%d] (%d) stopped by signal %d\n", jid, pid, sig);
+        if (kill(-pid, sig) < 0) 
+            unix_error("kill error");
+    }
     return;
 }
 
