@@ -27,3 +27,7 @@ mystop
 proxy
 tiny
 adder
+.proxy
+.noproxy
+
+
