@@ -4,10 +4,14 @@
  */
 
 #include "csapp.h"
+#include "sbuf.h" // for producer-consumer model
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+
+#define NTHREADS 4 // the max number of working threads
+#define SBUFSIZE 16 // the max number of queueing clients  
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -21,36 +25,37 @@ void parse_uri(char *uri, char *host, char *port, char *path);
 void read_reqheaders(rio_t *rio_asserver, char *bufh, const char *host, const char *port);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
-
+sbuf_t sbuf; // shared buffer of accepted descriptors
 
 
 int main(int argc, char **argv) { 
-    int listenfd, *connfdp;
+    int listenfd, *connfd;
     char *port;
     struct sockaddr_storage clientaddr; // enough space for any address
     char client_host[MAXLINE], client_port[MAXLINE];
     socklen_t clientlen;
     pthread_t tid;
 
-
     if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(0);
     }
     port = argv[1];
-    
     listenfd = Open_listenfd(port);
 
+    // use producer-consumer model for concurrency, ie. prethreading
+    sbuf_init(&sbuf, SBUFSIZE);
+    for (int i = 0; i < NTHREADS; i++) 
+        Pthread_create(&tid, NULL, thread, NULL);
+    
     while (1) {
         clientlen = sizeof(clientaddr);
-        connfdp = Malloc(sizeof(int));
-        *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
         Getnameinfo((SA *)&clientaddr, clientlen, client_host, MAXLINE,
                 client_port, MAXLINE, 0);
         printf("Connected to (%s: %s)\n", client_host, client_port);
 
-        // create a new thread to serve correspond client
-        Pthread_create(&tid, NULL, thread, connfdp);
+        sbuf_insert(&sbuf, connfd);
     }
 
     return 0;
@@ -59,10 +64,12 @@ int main(int argc, char **argv) {
 // thread routine
 void *thread(void *vargp) {
     Pthread_detach(pthread_self());
-    int connfd = *((int *)vargp);
-    doit(connfd);
-    Close(connfd);
-    return NULL;
+    while (1) {
+        int connfd = sbuf_remove(&sbuf);
+        doit(connfd);
+        Close(connfd);
+    }
+    return NULL; // should never reach here 
 }
 
 void doit(int connfd) {
