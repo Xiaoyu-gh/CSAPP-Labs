@@ -14,12 +14,23 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *conn_hdr = "Connection: close\r\n";
 static const char *proxy_conn_hdr = "Proxy-Connection: close\r\n";
 
+void *thread(void *vargp);
+void doit(int connfd);
+int read_reqline(int connfd, rio_t *rio_asserver, char *uri);
+void parse_uri(char *uri, char *host, char *port, char *path);
+void read_reqheaders(rio_t *rio_asserver, char *bufh, const char *host, const char *port);
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
+
+
+
+
 int main(int argc, char **argv) { 
-    int listenfd, connfd;
+    int listenfd, *connfdp;
     char *port;
     struct sockaddr_storage clientaddr; // enough space for any address
     char client_host[MAXLINE], client_port[MAXLINE];
     socklen_t clientlen;
+    pthread_t tid;
 
 
     if (argc != 2) {
@@ -32,23 +43,30 @@ int main(int argc, char **argv) {
 
     while (1) {
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        connfdp = Malloc(sizeof(int));
+        *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
         Getnameinfo((SA *)&clientaddr, clientlen, client_host, MAXLINE,
                 client_port, MAXLINE, 0);
         printf("Connected to (%s: %s)\n", client_host, client_port);
-        doit(connfd);
-        Close(connfd);
 
-
+        // create a new thread to serve correspond client
+        Pthread_create(&tid, NULL, thread, connfdp);
     }
-
 
     return 0;
 }
 
+// thread routine
+void *thread(void *vargp) {
+    Pthread_detach(pthread_self());
+    int connfd = *((int *)vargp);
+    doit(connfd);
+    Close(connfd);
+    return NULL;
+}
 
 void doit(int connfd) {
-    char bufl[MAXBUF], bufh[MAXBUF]; // store request line and headers
+    char bufl[MAXLINE], bufh[MAXBUF]; // store request line and headers
     char uri[MAXLINE], host[MAXLINE], port[10], path[MAXLINE];
     int clientfd; // proxy as a client to real server
     rio_t rio_asserver, rio_asclient;
@@ -56,11 +74,11 @@ void doit(int connfd) {
     Rio_readinitb(&rio_asserver, connfd);
 
     // read request from client and build new proxy request
-    if (read_reqline(connfd, &rio_asserver, bufl, uri) < 0)
+    if (read_reqline(connfd, &rio_asserver, uri) < 0)
         return;
     parse_uri(uri, host, port, path);
     sprintf(bufl, "GET %s HTTP/1.0\r\n", path); // build new request line
-    printf("sending request: %s", bufl);
+    printf("proxy request: %s", bufl);
     read_reqheaders(&rio_asserver, bufh, host, port); // new request headers
                                                       // stores in bufh
 
@@ -70,9 +88,12 @@ void doit(int connfd) {
     }
 
     // send request to real server
+    printf("sending request to %s ...\n\n", host);
     Rio_writen(clientfd, bufl, strlen(bufl));
     Rio_writen(clientfd, bufh, strlen(bufh));
 
+    // read response of real server
+    // and send back to client
     int n;
     char buf[MAXLINE];
     Rio_readinitb(&rio_asclient, clientfd);
@@ -88,17 +109,21 @@ void doit(int connfd) {
 /*
  * read request line and parse it 
  * return:
- *     1 if OK, -1 if not a GET request
+ *     1 if OK, -1 if not a GET request or malformed
  */
-int read_reqline(int connfd, rio_t *rp, char *bufl, char *uri) {
-    char method[MAXLINE], version[MAXLINE];
+int read_reqline(int connfd, rio_t *rp, char *uri) {
+    char buf[MAXLINE], method[MAXLINE], version[MAXLINE];
 
-    if (Rio_readlineb(rp, bufl, MAXLINE) == 0)
+    if (Rio_readlineb(rp, buf, MAXLINE) == 0)
         return -1; // an empty line
     printf("client request:\n");
-    printf("%s", bufl);
+    printf("%s", buf);
 
-    sscanf(bufl, "%s %s %s", method, uri, version);
+    if (sscanf(buf, "%s %s %s", method, uri, version) < 3) {
+        clienterror(connfd, buf, "400", "Bad Request",
+                "This request is malformed");
+        return -1;
+    }
     if (strcmp(method, "GET")) {
         clienterror(connfd, method, "501", "Not Implemented",
                 "Proxy server dosen't implement this method");
@@ -109,7 +134,7 @@ int read_reqline(int connfd, rio_t *rp, char *bufl, char *uri) {
 
 /*
  * parse URI into host, port and path
- * side effect: will detruct uri
+ * side effect: will destruct uri
  * note: without error cheking
  */
 void parse_uri(char *uri, char *host, char *port, char *path) {
@@ -144,7 +169,7 @@ void parse_uri(char *uri, char *host, char *port, char *path) {
 /*
  * read HTTP request headers, then build new headers into bufh
  */
-void read_reqheaders(rio_t *rp, char *bufh, char *host, char *port) {
+void read_reqheaders(rio_t *rp, char *bufh, const char *host, const char *port) {
     char buf[MAXLINE];
 
     while (Rio_readlineb(rp, buf, MAXLINE) > 0) {
