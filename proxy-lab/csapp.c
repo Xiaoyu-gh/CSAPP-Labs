@@ -32,14 +32,14 @@
 void unix_error(char *msg) /* Unix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(errno));
-    exit(0);
+    return;
 }
 /* $end unixerror */
 
 void posix_error(int code, char *msg) /* Posix-style error */
 {
     fprintf(stderr, "%s: %s\n", msg, strerror(code));
-    exit(0);
+    return;
 }
 
 void gai_error(int code, char *msg) /* Getaddrinfo-style error */
