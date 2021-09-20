@@ -5,10 +5,7 @@
 
 #include "csapp.h"
 #include "sbuf.h" // for producer-consumer model
-
-/* Recommended max cache and object sizes */
-#define MAX_CACHE_SIZE 1049000
-#define MAX_OBJECT_SIZE 102400
+#include "cache.h"
 
 #define NTHREADS 4 // the max number of working threads
 #define SBUFSIZE 16 // the max number of queueing clients  
@@ -24,17 +21,25 @@ int read_reqline(int connfd, rio_t *rio_asserver, char *uri);
 void parse_uri(char *uri, char *host, char *port, char *path);
 void read_reqheaders(rio_t *rio_asserver, char *bufh, const char *host, const char *port);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
+void sigint_handler(int sig);
+
 
 sbuf_t sbuf; // shared buffer of accepted descriptors
-
+cache_t cache; // shared cache
+int global_time = 0; // for LRU eviction policy
 
 int main(int argc, char **argv) { 
-    int listenfd, *connfd;
+    int listenfd, connfd;
     char *port;
     struct sockaddr_storage clientaddr; // enough space for any address
     char client_host[MAXLINE], client_port[MAXLINE];
     socklen_t clientlen;
     pthread_t tid;
+
+    Signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE signal(ref. CSAPP P964)
+    Signal(SIGINT, sigint_handler); // free the space when terminate
+
+    cache_init(&cache);
 
     if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -51,6 +56,7 @@ int main(int argc, char **argv) {
     while (1) {
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        global_time++; // each time accepte a connection, increase global time
         Getnameinfo((SA *)&clientaddr, clientlen, client_host, MAXLINE,
                 client_port, MAXLINE, 0);
         printf("Connected to (%s: %s)\n", client_host, client_port);
@@ -76,13 +82,21 @@ void doit(int connfd) {
     char bufl[MAXLINE], bufh[MAXBUF]; // store request line and headers
     char uri[MAXLINE], host[MAXLINE], port[10], path[MAXLINE];
     int clientfd; // proxy as a client to real server
+    int cacheline_idx;
     rio_t rio_asserver, rio_asclient;
 
     Rio_readinitb(&rio_asserver, connfd);
-
     // read request from client and build new proxy request
     if (read_reqline(connfd, &rio_asserver, uri) < 0)
         return;
+
+    // if hit cache, send object to client from the cache
+    if (is_hit(cache, uri, &cacheline_idx)) {
+        cache_serve(cache, cacheline_idx, connfd);
+        return;
+    }
+
+    // if a miss, go to the server
     parse_uri(uri, host, port, path);
     sprintf(bufl, "GET %s HTTP/1.0\r\n", path); // build new request line
     printf("proxy request: %s", bufl);
@@ -100,16 +114,23 @@ void doit(int connfd) {
     Rio_writen(clientfd, bufh, strlen(bufh));
 
     // read response of real server
-    // and send back to client
-    int n;
-    char buf[MAXLINE];
+    // then send back to client
+    int n, total_size = 0;
+    char buf[MAXBUF], object[MAX_OBJECT_SIZE];
+
     Rio_readinitb(&rio_asclient, clientfd);
-    printf("proxy recieved from real server:\n");
-    while (n = Rio_readlineb(&rio_asclient, buf, MAXLINE)) {
-        printf("%s", buf);
+    // use readnb rather than readlineb to support both string and binary data
+    while (n = Rio_readnb(&rio_asclient, buf, MAXBUF)) {
+        if (total_size <= MAX_OBJECT_SIZE)
+            // use memcpy but not strcpy
+            memcpy(object+total_size, buf, n); // append
+        total_size += n;
         Rio_writen(connfd, buf, n); // send back to client
     }
 
+    // if the object is too large, discard it
+    if (total_size <= MAX_OBJECT_SIZE)
+        write_to_cache(cache, uri, object, total_size);
 
 }
 
@@ -123,8 +144,6 @@ int read_reqline(int connfd, rio_t *rp, char *uri) {
 
     if (Rio_readlineb(rp, buf, MAXLINE) == 0)
         return -1; // an empty line
-    printf("client request:\n");
-    printf("%s", buf);
 
     if (sscanf(buf, "%s %s %s", method, uri, version) < 3) {
         clienterror(connfd, buf, "400", "Bad Request",
@@ -141,16 +160,17 @@ int read_reqline(int connfd, rio_t *rp, char *uri) {
 
 /*
  * parse URI into host, port and path
- * side effect: will destruct uri
  * note: without error cheking
  */
 void parse_uri(char *uri, char *host, char *port, char *path) {
     char *pos1, *pos2; 
-    
-    pos1 = strstr(uri, "http://");
+    char uri_cpy[MAXLINE];
+
+    strcpy(uri_cpy, uri);
+    pos1 = strstr(uri_cpy, "http://");
     if (!pos1) 
-        pos1 = uri;
-    else pos1 = uri + strlen("http://");
+        pos1 = uri_cpy;
+    else pos1 = uri_cpy + strlen("http://");
 
     // retrieve path 
     pos2 = strstr(pos1, "/");
@@ -229,5 +249,21 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<hr><em>Proxy server</em>\r\n");
     Rio_writen(fd, buf, strlen(buf));
+}
+
+/*
+ * when terminate, free up the space
+ */
+void sigint_handler(int sig) {
+    int olderrno = errno;
+
+    Sio_puts("Gracefully shutdown...\n");
+    Sio_puts("Freeing alloctaed memory...\n");
+    sbuf_deinit(&sbuf);
+    cache_free(&cache);
+    Sio_puts("Done.\n");
+
+    errno = olderrno;
+    exit(0);
 }
 
